@@ -1,0 +1,31 @@
+- name: "Centos Kickstart PXE Server Setup"
+  hosts: localhost
+  gather_facts: true
+  become: true
+
+  vars:
+    remote_home: "{{ ansible_env.HOME }}"
+
+    async_timeout_default: 3600
+    async_delay_default: 5
+    async_retries_default: "{{ (async_timeout_default / async_delay_default) | int }}"
+
+  tasks:
+
+    - name: Install TFTP Server
+      ansible.builtin.dnf:
+        name: tftp-server
+        state: present
+
+    - name: Start TFTP Service
+      ansible.builtin.service:
+        name: tftp.socket
+        state: started
+        enabled: 1
+
+    - name: Set TFTP Firewall Rule
+      ansible.posix.firewalld:
+        service: tftp
+        state: enabled
+        permanent: true
+

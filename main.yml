@@ -1,0 +1,204 @@
+- name: "Playbook for Centos 8 Workstation"
+  hosts: localhost
+  gather_facts: true
+
+  vars:
+    remote_home: "{{ ansible_env.HOME }}"
+    ansible_collections_directory: "{{ remote_home }}/.ansible/collections/ansible_collections"
+    ansible_collection:
+      namespace: community
+      collection: general
+
+    remote_user_password: "$6$YxmZ9ecqjaeqU4b$ds3REhuyZhVrQVcWLgc9LQpKlqUuffdvRsZgqedBojdiCye82a2zL9zkRuouZjLUNOgbp7dxyK35ThwC/R8bf."
+    remote_user_shell: /bin/bash
+    async_timeout_default: 3600
+    async_delay_default: 5
+    async_retries_default: "{{ (async_timeout_default / async_delay_default) | int }}"
+
+  pre_tasks:
+
+    - name: Install EPEL repo
+      become: true
+      ansible.builtin.dnf:
+        name: epel-release
+        state: present
+
+    - name: Security related upgrades
+      become: true
+      block:
+        - name: Start upgrade (async)
+          ansible.builtin.dnf:
+            name: "*"
+            state: latest
+            security: true
+          async: "{{ async_timeout_default }}"
+          poll: 0
+          register: upgrade_minimal
+
+        - name: Check on upgrade task
+          ansible.builtin.async_status:
+            jid: "{{ upgrade_minimal.ansible_job_id }}"
+          register: upgrade_minimal_result
+          until: upgrade_minimal_result.finished
+          retries: "{{ async_retries_default }}"
+          delay: "{{ async_delay_default }}"
+
+  tasks:
+
+    - name: Install Fundamentals
+      become: true
+      ansible.builtin.dnf:
+        name:
+          - htop
+          - iftop
+          - nethogs
+          - curl
+          - wget
+          - vim
+          - git
+          - tree
+        state: present
+
+    - name: Install Oh-My-Bash
+      become: false
+      shell: bash -c "$(curl -fsSL https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh)"
+      args:
+        creates: "{{ remote_home }}/.bashrc.pre-oh-my-bash"
+
+    - name: Set Oh-My-Bash theme
+      ansible.builtin.lineinfile:
+        path: "{{ remote_home }}/.bashrc"
+        regexp: "^OSH_THEME="
+        line: 'OSH_THEME="kitsune"'
+        state: present
+
+    - name: Install Ansible-related packages
+      become: false
+      block:
+
+        - name: Install ansible (pip3)
+          ansible.builtin.pip:
+            name: ansible-base
+            state: present
+            executable: pip3
+            extra_args: --user
+
+        - name: Install ansible-lint
+          ansible.builtin.pip:
+            name: ansible-lint
+            state: present
+            executable: pip3
+            extra_args: --user
+
+        - name: "Check whether installed collection: {{ ansible_collection.namespace }}.{{  ansible_collection.collection }}"
+          ansible.builtin.stat:
+            path: "{{ ansible_collections_directory }}/{{ ansible_collection.namespace }}/{{ ansible_collection.collection }}"
+          register: "collection_directory"
+          
+        - name: Install ansible collections
+          ansible.builtin.command:
+            cmd: "ansible-galaxy collection install {{ ansible_collection.namespace }}.{{ ansible_collection.collection }}"
+          when: "not collection_directory.stat.isdir"
+
+           
+    - name: Install Disk-related packages
+      become: true
+      ansible.builtin.dnf:
+        name:
+          - udisks2
+          - ntfs-3g
+        state: present
+
+    # Requires EPEL
+    - name: Install KDE Plasma
+      become: true
+      block:
+
+        - name: Install EPEL-playgroud repo
+          command: dnf config-manager --enable epel-playground
+          args:
+            warn: false
+
+        - name: Enable PowerTools repo
+          command:  dnf config-manager --set-enabled powertools
+          args:
+            warn: false
+
+        - name: Install KDE desktop
+          command: dnf group install kde-desktop -y
+          args:
+            warn: false
+          async: "{{ async_timeout_default }}"
+          poll: 0
+          register: kde_install
+
+        - name: Check on KDE desktop install task
+          ansible.builtin.async_status:
+            jid: "{{ kde_install.ansible_job_id }}"
+          register: kde_install_result
+          until: kde_install_result.finished
+          retries: "{{ async_retries_default }}"
+          delay: "{{ async_delay_default }}"
+
+        - name: Change default target to graphical.target
+          ansible.builtin.file:
+            src: /usr/lib/systemd/system/graphical.target
+            dest: /etc/systemd/system/default.target
+            state: link
+
+        - name: Install SDDM desktop manager
+          ansible.builtin.dnf:
+            name: sddm
+            state: present
+
+        - name: Start service sddm
+          ansible.builtin.service:
+            name: sddm
+            state: started
+            enabled: true
+
+    - name: Install KDE programs
+      become: true
+      block:
+              
+        - name: Install Kamoso (for Webcam)
+          ansible.builtin.dnf:
+            name: kamoso
+            state: present
+
+        - name: Install KDE Connect
+          ansible.builtin.dnf:
+            name: kde-connect
+            state: present
+
+    - name: Install browsers
+      become: true
+      ansible.builtin.dnf:
+        name:
+          - firefox
+        state: present
+
+    - name: Install terminal-related packages
+      become: true
+      block:
+
+        - name: Install terminal-emulators and shells
+          ansible.builtin.dnf:
+            name:
+              - terminator
+              - tmux
+            state: present
+
+        - name: Set default shell
+          ansible.builtin.user:
+            name: "{{ remote_user | default(ansible_user) }}"
+            #password: "{{ remote_user_password }}"
+            update_password: on_create
+            shell: "{{ remote_user_shell }}"
+
+#    - name: Remove previously installed packages (if any)
+#      become: true
+#      ansible.builtin.dnf:
+#        name:
+#          - some_program
+#        state: absent
